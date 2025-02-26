@@ -26,12 +26,57 @@ function getCoords(station) {
     return { cx: x, cy: y };  
 }
 
+function computeStationTraffic(stations, trips) {
+    const departures = d3.rollup(
+        trips,
+        (v) => v.length,
+        (d) => d.start_station_id
+    );
 
-//import data
+    const arrivals = d3.rollup(
+        trips,
+        (v) => v.length,
+        (d) => d.end_station_id
+    );
+
+    return stations.map((station) => {
+        let id = station.short_name;
+        station.arrivals = arrivals.get(id) ?? 0;
+        station.departures = departures.get(id) ?? 0;
+        station.totalTraffic = station.arrivals + station.departures;
+        return station;
+    });
+}
+
+function minutesSinceMidnight(date) {
+    return date.getHours() * 60 + date.getMinutes();
+}
+
+// 过滤符合时间范围（±60分钟）的 trips
+function filterTripsbyTime(trips, timeFilter) {
+    return timeFilter === -1
+        ? trips
+        : trips.filter((trip) => {
+            const startedMinutes = minutesSinceMidnight(trip.started_at);
+            const endedMinutes = minutesSinceMidnight(trip.ended_at);
+            return (
+                Math.abs(startedMinutes - timeFilter) <= 60 ||
+                Math.abs(endedMinutes - timeFilter) <= 60
+            );
+        });
+}
+
+
+
+
+
+
+
+// Import data
 map.on('load', async () => { 
-    console.log('begin to add data')
+    console.log('begin to add data');
 
-    //import bike lanes
+    // Import Boston bike lanes
     map.addSource('boston_route', {
         type: 'geojson',
         data: 'https://bostonopendata-boston.opendata.arcgis.com/datasets/boston::existing-bike-network-2022.geojson'
@@ -42,15 +87,13 @@ map.on('load', async () => {
         type: 'line',
         source: 'boston_route',
         paint: {
-            'line-color': '#32D400',  // A bright green using hex code
-            'line-width': 5,          // Thicker lines
-            'line-opacity': 0.6       // Slightly less transparent
-          }
+            'line-color': '#32D400',
+            'line-width': 5,
+            'line-opacity': 0.6
+        }
     });
 
-
-
-    //import cambridge bike lanes dats
+    // Import Cambridge bike lanes
     map.addSource('cambridge_route', {
         type: 'geojson',
         data: 'https://raw.githubusercontent.com/cambridgegis/cambridgegis_data/main/Recreation/Bike_Facilities/RECREATION_BikeFacilities.geojson'
@@ -61,93 +104,132 @@ map.on('load', async () => {
         type: 'line',
         source: 'cambridge_route',
         paint: {
-            'line-color': '#32D400',  // A bright green using hex code
-            'line-width': 5,          // Thicker lines
-            'line-opacity': 0.6       // Slightly less transparent
-          }
-      });
-
-
-    // bike stations
+            'line-color': '#32D400',
+            'line-width': 5,
+            'line-opacity': 0.6
+        }
+    });
 
     let stations = [];
 
     try {
+        // Load bike stations
         const jsonurl = 'https://dsc106.com/labs/lab07/data/bluebikes-stations.json';
         const jsonData = await d3.json(jsonurl);
-
         console.log('Loaded JSON Data:', jsonData);
         
         stations = jsonData.data.stations;
         console.log('Stations Array:', stations);
-
-        const svg = d3.select('#map').select('svg');
-
-        const circles = svg.selectAll('circle')
-            .data(stations)
-            .enter()
-            .append('circle')
-            .attr('r', 5)  
-            .attr('fill', 'steelblue') 
-            .attr('stroke', 'white') 
-            .attr('stroke-width', 1)  
-            .attr('opacity', 0.8);  
-        function updatePositions() {
-            circles
-                .attr('cx', d => getCoords(d).cx)  
-                .attr('cy', d => getCoords(d).cy); 
-        }
-    
-        updatePositions();
-
-        map.on('move', updatePositions);
-        map.on('zoom', updatePositions);
-        map.on('resize', updatePositions);
-        map.on('moveend', updatePositions);
-
+        
     } catch (error) {
         console.error('Error loading JSON:', error);
+        return;
     }
 
     try {
-        // traffic cvs
+        // Load traffic data
         const trafficUrl = 'https://dsc106.com/labs/lab07/data/bluebikes-traffic-2024-03.csv';
         const traData = await d3.csv(trafficUrl);
+        console.log('Loaded CSV Data:', traData);
 
-        console.log('Loaded CVS Data:', traData);
-    
+        const departures = d3.rollup(
+            traData,
+            (v) => v.length,
+            (d) => d.start_station_id
+        );
 
-    const departures = d3.rollup(
-        traData,
-        (v) => v.length,
-        (d) => d.start_station_id,
-    );
+        const arrivals = d3.rollup(
+            traData,
+            (v) => v.length,
+            (d) => d.end_station_id
+        );
 
+        // Merge traffic data into stations
+        stations = stations.map((station) => {
+            let id = station.short_name;
+            station.arrivals = arrivals.get(id) ?? 0;
+            station.departures = departures.get(id) ?? 0;
+            station.totalTraffic = station.arrivals + station.departures;
+            return station;
+        });
 
-    const arrivals = d3.rollup(
-        traData,
-        (v) => v.length,
-        (d) => d.end_station_id
-    );
-
-    stations = stations.map((station) => {
-        let id = station.short_name;
-        station.arrivals = arrivals.get(id) ?? 0;
-        station.departures = departures.get(id) ?? 0;
-        station.totalTraffic = station.arrivals + station.departures;
-        return station;
-    });
-    
-    console.log('Calculated site data:', stations);
+        console.log('Calculated station data:', stations);
 
     } catch(error){
-        console.log('Error loading CVS:', error)
+        console.log('Error loading CSV:', error);
+        return;
     }
 
+    // 定义获取坐标的方法
+    function getCoords(d) {
+        const pos = map.project([d.lon, d.lat]);
+        return { cx: pos.x, cy: pos.y };
+    }
 
+    // Define the scaling function
+    const radiusScale = d3
+        .scaleSqrt()
+        .domain([0, d3.max(stations, (d) => d.totalTraffic)])
+        .range([0, 25]);
 
+    // Select or create an SVG element
+    let svg = d3.select('#map').select('svg');
+    if (svg.empty()) {
+        svg = d3.select('#map').append('svg')
+            .attr('width', '100%')
+            .attr('height', '100%')
+            .style('position', 'absolute')
+            .style('top', '0')
+            .style('left', '0');
+    }
 
+    // Append circles for stations
+    const circles = svg.selectAll('circle')
+        .data(stations)
+        .enter()
+        .append('circle')
+        .attr('r', d => radiusScale(d.totalTraffic))
+        .attr('fill', 'steelblue')
+        .attr('fill-opacity', 0.6)
+        .attr('stroke', 'white')
+        .attr('stroke-width', 1)
+        .each(function(d) {
+            d3.select(this)
+              .append('title')
+              .text(`${d.totalTraffic} trips (${d.departures} departures, ${d.arrivals} arrivals)`);
+        });
+
+    function updatePositions() {
+        circles
+            .attr('cx', d => getCoords(d).cx)
+            .attr('cy', d => getCoords(d).cy);
+    }
+
+    updatePositions();
+
+    map.on('move', updatePositions);
+    map.on('zoom', updatePositions);
+    map.on('resize', updatePositions);
+    map.on('moveend', updatePositions);
+
+    const slider = document.getElementById("time-filter");
+    const timeDisplay = document.getElementById("selected-time");
+    const anyTimeDisplay = document.getElementById("any-time");
+
+    slider.addEventListener("input", () => {
+       if (slider.value === "-1") {
+          timeDisplay.style.display = "none";
+          anyTimeDisplay.style.display = "block";
+      } else {
+         const hours = Math.floor(slider.value / 60);
+         const minutes = slider.value % 60;
+         const formattedTime = `${hours}:${minutes.toString().padStart(2, "0")}`;
+        
+         timeDisplay.textContent = formattedTime;
+         timeDisplay.style.display = "block";
+         anyTimeDisplay.style.display = "none";
+     }
+    });
 
 });
-
 

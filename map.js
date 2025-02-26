@@ -25,13 +25,53 @@ function getCoords(station) {
     const { x, y } = map.project(point);  
     return { cx: x, cy: y };  
 }
+// 计算站点客流量
+function computeStationTraffic(stations, trips) {
+    const departures = d3.rollup(
+        trips,
+        (v) => v.length,
+        (d) => d.start_station_id
+    );
 
+    const arrivals = d3.rollup(
+        trips,
+        (v) => v.length,
+        (d) => d.end_station_id
+    );
 
-//import data
+    return stations.map((station) => {
+        let id = station.short_name;
+        station.arrivals = arrivals.get(id) ?? 0;
+        station.departures = departures.get(id) ?? 0;
+        station.totalTraffic = station.arrivals + station.departures;
+        return station;
+    });
+}
+
+// 计算从午夜到现在的分钟数
+function minutesSinceMidnight(date) {
+    return date.getHours() * 60 + date.getMinutes();
+}
+
+// 过滤符合时间范围（±60分钟）的 trips
+function filterTripsbyTime(trips, timeFilter) {
+    return timeFilter === -1
+        ? trips
+        : trips.filter((trip) => {
+            const startedMinutes = minutesSinceMidnight(trip.started_at);
+            const endedMinutes = minutesSinceMidnight(trip.ended_at);
+            return (
+                Math.abs(startedMinutes - timeFilter) <= 60 ||
+                Math.abs(endedMinutes - timeFilter) <= 60
+            );
+        });
+}
+
+// Import data
 map.on('load', async () => { 
     console.log('begin to add data');
 
-    // Import bike lanes
+    // Import Boston bike lanes
     map.addSource('boston_route', {
         type: 'geojson',
         data: 'https://bostonopendata-boston.opendata.arcgis.com/datasets/boston::existing-bike-network-2022.geojson'
@@ -65,114 +105,154 @@ map.on('load', async () => {
         }
     });
 
-    // **Initialize empty stations array**
     let stations = [];
 
     try {
-        // **Load station data (JSON)**
+        // Load bike stations
         const jsonurl = 'https://dsc106.com/labs/lab07/data/bluebikes-stations.json';
         const jsonData = await d3.json(jsonurl);
+        console.log('Loaded JSON Data:', jsonData);
+        
         stations = jsonData.data.stations;
-
-        console.log('✅ Loaded JSON Data:', stations);
+        
     } catch (error) {
-        console.error('❌ Error loading JSON:', error);
-    }
-
-    try {
-        // **Load traffic data (CSV)**
-        const trafficUrl = 'https://dsc106.com/labs/lab07/data/bluebikes-traffic-2024-03.csv';
-        const traData = await d3.csv(trafficUrl);
-        console.log('✅ Loaded CSV Data:', traData);
-
-        // **Compute departures**
-        const departures = d3.rollup(
-            traData,
-            (v) => v.length,
-            (d) => d.start_station_id
-        );
-
-        // **Compute arrivals**
-        const arrivals = d3.rollup(
-            traData,
-            (v) => v.length,
-            (d) => d.end_station_id
-        );
-
-        // **Update stations with traffic data**
-        stations = stations.map((station) => {
-            let id = station.short_name;
-            station.arrivals = arrivals.get(id) ?? 0;
-            station.departures = departures.get(id) ?? 0;
-            station.totalTraffic = station.arrivals + station.departures;
-            return station;
-        });
-
-        console.log('🚲 Calculated site data:', stations);
-    } catch (error) {
-        console.log('❌ Error loading CSV:', error);
-    }
-
-    // **Check if stations data is available**
-    if (!stations || stations.length === 0) {
-        console.error('🚨 No station data found!');
+        console.error('Error loading JSON:', error);
         return;
     }
 
-    // **Compute max traffic and create scale**
-    const maxTraffic = stations.length > 0 ? d3.max(stations, d => d.totalTraffic) : 1;
-    const radiusScale = d3
-        .scaleSqrt()
-        .domain([0, maxTraffic])
-        .range([2, 25]);  // **确保最小半径不为 0**
+    let trips = [];
 
-    // **Add station markers**
-    const svg = d3.select('#map').select('svg');
+    try {
+        // 加载并转换 trip 数据
+        trips = await d3.csv(
+            'https://dsc106.com/labs/lab07/data/bluebikes-traffic-2024-03.csv',
+            (trip) => {
+                trip.started_at = new Date(trip.started_at);
+                trip.ended_at = new Date(trip.ended_at);
+                return trip;
+            }
+        );
 
-    const circles = svg.selectAll('circle')
-        .data(stations)
+        console.log('Loaded CSV Data:', trips);
+    } catch (error) {
+        console.log('Error loading CSV:', error);
+        return;
+    }
+
+    // 计算初始站点客流量
+    stations = computeStationTraffic(stations, trips);
+
+    function getCoords(station) {
+        const point = new mapboxgl.LngLat(+station.lon, +station.lat);  
+        const { x, y } = map.project(point);  
+        return { cx: x, cy: y };  
+    }
+
+    // 定义比例尺
+    const radiusScale = d3.scaleSqrt().domain([0, d3.max(stations, (d) => d.totalTraffic)]).range([0, 25]);
+
+    // 创建 SVG
+    let svg = d3.select('#map').select('svg');
+    if (svg.empty()) {
+        svg = d3.select('#map').append('svg')
+            .attr('width', '100%')
+            .attr('height', '100%')
+            .style('position', 'absolute')
+            .style('top', '0')
+            .style('left', '0');
+    }
+
+    let stationFlow = d3.scaleQuantize().domain([0, 1]).range([0, 0.5, 1]);
+
+
+    // 创建站点散点图
+    const circles = svg
+        .selectAll('circle')
+        .data(stations, (d) => d.short_name)
         .enter()
         .append('circle')
-        .attr('r', d => radiusScale(d.totalTraffic))  // **Apply traffic-based size**
+        .attr('r', (d) => radiusScale(d.totalTraffic))
         .attr('fill', 'steelblue')
+        .attr('fill-opacity', 0.6)
         .attr('stroke', 'white')
         .attr('stroke-width', 1)
-        .attr('opacity', 0.6)
-        .attr('pointer-events', 'auto');
+        .style("--departure-ratio", d => stationFlow(d.departures / d.totalTraffic))  
+        .each(function (d) {
+            d3.select(this)
+                .append('title')
+                .text(`${d.totalTraffic} trips (${d.departures} departures, ${d.arrivals} arrivals)`);
+        });
+                 
 
-    // **Check if circles were created**
-    if (circles.empty()) {
-        console.error('🚨 No circles found! Check if station data was loaded correctly.');
-    } else {
-        console.log('✅ Circles created successfully!');
-    }
-
-    // **Add tooltips**
-    circles.each(function(d) {
-        let title = d3.select(this).append('title')
-            .text(`${d.totalTraffic} trips (${d.departures} departures, ${d.arrivals} arrivals)`);
-        
-        console.log('Tooltip added:', title.node());  // **检查 `<title>` 是否正确附加**
-    });
-
-    
-
-    // **Update positions function**
     function updatePositions() {
-        circles
-            .attr('cx', d => getCoords(d).cx)
-            .attr('cy', d => getCoords(d).cy);
+        circles.attr('cx', d => getCoords(d).cx).attr('cy', d => getCoords(d).cy);
     }
 
-    // **Initial update**
     updatePositions();
-
-    // **Listen for map interactions**
     map.on('move', updatePositions);
     map.on('zoom', updatePositions);
     map.on('resize', updatePositions);
     map.on('moveend', updatePositions);
+
+    function updateScatterPlot(timeFilter) {
+        const filteredTrips = filterTripsbyTime(trips, timeFilter);
+        const filteredStations = computeStationTraffic(stations, filteredTrips);
+
+        radiusScale.range(timeFilter === -1 ? [0, 25] : [3, 50]);
+
+        circles
+            .data(filteredStations, (d) => d.short_name)
+            .join('circle')
+            .attr('r', (d) => radiusScale(d.totalTraffic))
+            .style('--departure-ratio', (d) => stationFlow(d.departures / d.totalTraffic)); // 更新颜色
+    }
+
+    const slider = document.getElementById("time-filter");
+    const timeDisplay = document.getElementById("selected-time");
+    const anyTimeDisplay = document.getElementById("any-time");
+
+    function updateTimeDisplay() {
+        let timeFilter = Number(slider.value);
+
+        if (timeFilter === -1) {
+            timeDisplay.style.display = "none";
+            anyTimeDisplay.style.display = "block";
+        } else {
+            const hours = Math.floor(timeFilter / 60);
+            const minutes = timeFilter % 60;
+            const formattedTime = `${hours}:${minutes.toString().padStart(2, "0")}`;
+        
+            timeDisplay.textContent = formattedTime;
+            timeDisplay.style.display = "block";
+            anyTimeDisplay.style.display = "none";
+        }
+
+        updateScatterPlot(timeFilter);
+    }
+
+    slider.addEventListener("input", updateTimeDisplay);
+    updateTimeDisplay();
+
+
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 });
-
-
 

@@ -29,4 +29,87 @@ html, body {
 
   #map svg circle {
     pointer-events: auto;  /* **允许鼠标悬停查看 tooltip** */
+    z-index: 1000;
+    
   }
+
+
+
+  header {
+    display: flex;
+    gap: 1em;
+    align-items: baseline;
+  }
+
+  label {
+    margin-left: auto;
+  }
+
+  input[type="range"] {
+    vertical-align: middle;
+  }
+
+  time, em {
+    display: block;  /* Prevent UI shifting */
+    margin-top: 5px;
+  }
+
+  em {
+    font-style: italic;
+    color: #777; /* Lighter color to differentiate */
+    
+  }
+
+
+/* 让 circle 和 legend 共享颜色规则 */
+
+circle {
+  --color-departures: steelblue;
+  --color-arrivals: darkorange;
+  --color: color-mix(
+      in oklch,
+      var(--color-departures) calc(100% * var(--departure-ratio)),
+      var(--color-arrivals)
+  );
+  fill: var(--color);
+}
+
+
+/* 让 circle 和 legend-item 共享颜色规则 */
+#map circle,
+.legend-item {
+    --color-departures: steelblue;
+    --color-arrivals: darkorange;
+    --color: color-mix(
+        in oklch,
+        var(--color-departures) calc(100% * var(--departure-ratio)),
+        var(--color-arrivals)
+    );
+    background-color: var(--color);
+}
+
+/* 📌 图例整体样式 */
+.legend {
+    display: flex;
+    justify-content: space-between; /* 让内容平均分布 */
+    gap: 1px; /* 细缝隙，防止颜色融合 */
+    margin-top: 10px;
+    padding: 3px;
+    border-radius: 2px;
+    overflow: hidden;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    font-size: 12px;
+}
+
+/* 📌 每个图例块 */
+.legend-item {
+    flex: 1; /* 让每个块平均分布 */
+    padding: 25px 200px; /* 水平填充比垂直填充多，使其均匀 */
+    color: white; /* 提高对比度 */
+    font-weight: bold;
+    text-align: center;
+    border-radius: 8px;
+}
+
+
+
