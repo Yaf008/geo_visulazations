@@ -29,9 +29,9 @@ function getCoords(station) {
 
 //import data
 map.on('load', async () => { 
-    console.log('begin to add data')
+    console.log('begin to add data');
 
-    //import bike lanes
+    // Import bike lanes
     map.addSource('boston_route', {
         type: 'geojson',
         data: 'https://bostonopendata-boston.opendata.arcgis.com/datasets/boston::existing-bike-network-2022.geojson'
@@ -42,15 +42,13 @@ map.on('load', async () => {
         type: 'line',
         source: 'boston_route',
         paint: {
-            'line-color': '#32D400',  // A bright green using hex code
-            'line-width': 5,          // Thicker lines
-            'line-opacity': 0.6       // Slightly less transparent
-          }
+            'line-color': '#32D400',
+            'line-width': 5,
+            'line-opacity': 0.6
+        }
     });
 
-
-
-    //import cambridge bike lanes dats
+    // Import Cambridge bike lanes
     map.addSource('cambridge_route', {
         type: 'geojson',
         data: 'https://raw.githubusercontent.com/cambridgegis/cambridgegis_data/main/Recreation/Bike_Facilities/RECREATION_BikeFacilities.geojson'
@@ -61,52 +59,120 @@ map.on('load', async () => {
         type: 'line',
         source: 'cambridge_route',
         paint: {
-            'line-color': '#32D400',  // A bright green using hex code
-            'line-width': 5,          // Thicker lines
-            'line-opacity': 0.6       // Slightly less transparent
-          }
-      });
+            'line-color': '#32D400',
+            'line-width': 5,
+            'line-opacity': 0.6
+        }
+    });
 
-
-    // bike stations
+    // **Initialize empty stations array**
+    let stations = [];
 
     try {
+        // **Load station data (JSON)**
         const jsonurl = 'https://dsc106.com/labs/lab07/data/bluebikes-stations.json';
         const jsonData = await d3.json(jsonurl);
+        stations = jsonData.data.stations;
 
-        console.log('Loaded JSON Data:', jsonData);
-        
-        let stations = jsonData.data.stations;
-        console.log('Stations Array:', stations);
-
-        const svg = d3.select('#map').select('svg');
-
-        const circles = svg.selectAll('circle')
-            .data(stations)
-            .enter()
-            .append('circle')
-            .attr('r', 5)  
-            .attr('fill', 'steelblue') 
-            .attr('stroke', 'white') 
-            .attr('stroke-width', 1)  
-            .attr('opacity', 0.8);  
-        function updatePositions() {
-            circles
-                .attr('cx', d => getCoords(d).cx)  
-                .attr('cy', d => getCoords(d).cy); 
-        }
-    
-        updatePositions();
-
-        map.on('move', updatePositions);
-        map.on('zoom', updatePositions);
-        map.on('resize', updatePositions);
-        map.on('moveend', updatePositions);
-
+        console.log('✅ Loaded JSON Data:', stations);
     } catch (error) {
-        console.error('Error loading JSON:', error);
+        console.error('❌ Error loading JSON:', error);
     }
 
+    try {
+        // **Load traffic data (CSV)**
+        const trafficUrl = 'https://dsc106.com/labs/lab07/data/bluebikes-traffic-2024-03.csv';
+        const traData = await d3.csv(trafficUrl);
+        console.log('✅ Loaded CSV Data:', traData);
+
+        // **Compute departures**
+        const departures = d3.rollup(
+            traData,
+            (v) => v.length,
+            (d) => d.start_station_id
+        );
+
+        // **Compute arrivals**
+        const arrivals = d3.rollup(
+            traData,
+            (v) => v.length,
+            (d) => d.end_station_id
+        );
+
+        // **Update stations with traffic data**
+        stations = stations.map((station) => {
+            let id = station.short_name;
+            station.arrivals = arrivals.get(id) ?? 0;
+            station.departures = departures.get(id) ?? 0;
+            station.totalTraffic = station.arrivals + station.departures;
+            return station;
+        });
+
+        console.log('🚲 Calculated site data:', stations);
+    } catch (error) {
+        console.log('❌ Error loading CSV:', error);
+    }
+
+    // **Check if stations data is available**
+    if (!stations || stations.length === 0) {
+        console.error('🚨 No station data found!');
+        return;
+    }
+
+    // **Compute max traffic and create scale**
+    const maxTraffic = stations.length > 0 ? d3.max(stations, d => d.totalTraffic) : 1;
+    const radiusScale = d3
+        .scaleSqrt()
+        .domain([0, maxTraffic])
+        .range([2, 25]);  // **确保最小半径不为 0**
+
+    // **Add station markers**
+    const svg = d3.select('#map').select('svg');
+
+    const circles = svg.selectAll('circle')
+        .data(stations)
+        .enter()
+        .append('circle')
+        .attr('r', d => radiusScale(d.totalTraffic))  // **Apply traffic-based size**
+        .attr('fill', 'steelblue')
+        .attr('stroke', 'white')
+        .attr('stroke-width', 1)
+        .attr('opacity', 0.6)
+        .attr('pointer-events', 'auto');
+
+    // **Check if circles were created**
+    if (circles.empty()) {
+        console.error('🚨 No circles found! Check if station data was loaded correctly.');
+    } else {
+        console.log('✅ Circles created successfully!');
+    }
+
+    // **Add tooltips**
+    circles.each(function(d) {
+        let title = d3.select(this).append('title')
+            .text(`${d.totalTraffic} trips (${d.departures} departures, ${d.arrivals} arrivals)`);
+        
+        console.log('Tooltip added:', title.node());  // **检查 `<title>` 是否正确附加**
+    });
+
+    
+
+    // **Update positions function**
+    function updatePositions() {
+        circles
+            .attr('cx', d => getCoords(d).cx)
+            .attr('cy', d => getCoords(d).cy);
+    }
+
+    // **Initial update**
+    updatePositions();
+
+    // **Listen for map interactions**
+    map.on('move', updatePositions);
+    map.on('zoom', updatePositions);
+    map.on('resize', updatePositions);
+    map.on('moveend', updatePositions);
 });
 
-  
+
+

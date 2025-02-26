@@ -26,3 +26,7 @@ html, body {
     z-index: 1; /* 确保 SVG 在地图之上 */
     pointer-events: none; /* 允许鼠标操作地图，不影响拖动 */
   }
+
+  #map svg circle {
+    pointer-events: auto;  /* **允许鼠标悬停查看 tooltip** */
+  }
